@@ -29,8 +29,11 @@ import java.util.concurrent.TimeUnit;
 /**
  * Decoration on an ScheduledExecutorService that tracks created futures and provides
  * a method to close futures created via this class
+ *
+ * <p> DESIGN: Important to synchronize task scheduling using implicit monitor to assure
+ * tasks are properly cancelled when {@link #close()} method is invoked
  */
-public class CloseableScheduledExecutorService extends CloseableExecutorService {
+public final class CloseableScheduledExecutorService extends CloseableExecutorService {
     private final ScheduledExecutorService scheduledExecutorService;
 
     /**
@@ -62,7 +65,7 @@ public class CloseableScheduledExecutorService extends CloseableExecutorService 
      *         the task and whose <tt>get()</tt> method will return
      *         <tt>null</tt> upon completion
      */
-    public Future<?> schedule(Runnable task, long delay, TimeUnit unit) {
+    public synchronized Future<?> schedule(Runnable task, long delay, TimeUnit unit) {
         Preconditions.checkState(isOpen.get(), "CloseableExecutorService is closed");
 
         InternalFutureTask<Void> futureTask = new InternalFutureTask<Void>(new FutureTask<Void>(task, null));
@@ -88,7 +91,7 @@ public class CloseableScheduledExecutorService extends CloseableExecutorService 
      *         the task, and whose <tt>get()</tt> method will throw an
      *         exception upon cancellation
      */
-    public Future<?> scheduleWithFixedDelay(Runnable task, long initialDelay, long delay, TimeUnit unit) {
+    public synchronized Future<?> scheduleWithFixedDelay(Runnable task, long initialDelay, long delay, TimeUnit unit) {
         Preconditions.checkState(isOpen.get(), "CloseableExecutorService is closed");
 
         ScheduledFuture<?> scheduledFuture =
@@ -112,7 +115,7 @@ public class CloseableScheduledExecutorService extends CloseableExecutorService 
      * @return a Future representing pending completion of the task, and whose <tt>get()</tt> method
      *     will throw an exception upon cancellation
      */
-    public Future<?> scheduleAtFixedRate(Runnable task, long initialDelay, long period, TimeUnit unit) {
+    public synchronized Future<?> scheduleAtFixedRate(Runnable task, long initialDelay, long period, TimeUnit unit) {
         Preconditions.checkState(isOpen.get(), "CloseableExecutorService is closed");
 
         ScheduledFuture<?> scheduledFuture =

@@ -21,9 +21,8 @@ package org.apache.curator.utils;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
-import com.google.common.collect.Maps;
-import com.google.common.collect.Sets;
 import java.io.Closeable;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.Set;
 import java.util.concurrent.*;
@@ -34,10 +33,17 @@ import org.slf4j.LoggerFactory;
 /**
  * Decoration on an ExecutorService that tracks created futures and provides
  * a method to close futures created via this class
+ *
+ * <p>Instances are thread safe and can freely reused between threads
  */
 public class CloseableExecutorService implements Closeable {
     private final Logger log = LoggerFactory.getLogger(CloseableExecutorService.class);
-    private final Set<Future<?>> futures = Sets.newSetFromMap(Maps.<Future<?>, Boolean>newConcurrentMap());
+
+    // IMPORTANT: assure that when close() method is invoked all executed tasks are
+    // included in the collection, and assure that no new tasks can be scheduled using this API.
+    // Implicit monitor will be used
+    private final Set<Future<?>> futures = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
     private final ExecutorService executorService;
     private final boolean shutdownOnClose;
     protected final AtomicBoolean isOpen = new AtomicBoolean(true);
@@ -126,17 +132,21 @@ public class CloseableExecutorService implements Closeable {
      */
     @Override
     public void close() {
-        isOpen.set(false);
-        Iterator<Future<?>> iterator = futures.iterator();
-        while (iterator.hasNext()) {
-            Future<?> future = iterator.next();
-            iterator.remove();
-            if (!future.isDone() && !future.isCancelled() && !future.cancel(true)) {
-                log.warn("Could not cancel " + future);
+        if (isOpen.compareAndSet(true, false)) {
+            // Before interrupting tasks we need to be sure that all submitted tasks are present
+            synchronized (this) {
+                Iterator<Future<?>> iterator = futures.iterator();
+                while (iterator.hasNext()) {
+                    Future<?> future = iterator.next();
+                    iterator.remove();
+                    if (!future.isDone() && !future.isCancelled() && !future.cancel(true)) {
+                        log.warn("Could not cancel {}", future);
+                    }
+                }
             }
-        }
-        if (shutdownOnClose) {
-            executorService.shutdownNow();
+            if (shutdownOnClose) {
+                executorService.shutdownNow();
+            }
         }
     }
 
@@ -148,10 +158,10 @@ public class CloseableExecutorService implements Closeable {
      * @param task the task to submit
      * @return a future to watch the task
      */
-    public <V> Future<V> submit(Callable<V> task) {
+    public synchronized <V> Future<V> submit(Callable<V> task) {
         Preconditions.checkState(isOpen.get(), "CloseableExecutorService is closed");
 
-        InternalFutureTask<V> futureTask = new InternalFutureTask<V>(new FutureTask<V>(task));
+        InternalFutureTask<V> futureTask = new InternalFutureTask<>(new FutureTask<>(task));
         executorService.execute(futureTask);
         return futureTask;
     }
@@ -164,10 +174,10 @@ public class CloseableExecutorService implements Closeable {
      * @param task the task to submit
      * @return a future to watch the task
      */
-    public Future<?> submit(Runnable task) {
+    public synchronized Future<?> submit(Runnable task) {
         Preconditions.checkState(isOpen.get(), "CloseableExecutorService is closed");
 
-        InternalFutureTask<Void> futureTask = new InternalFutureTask<Void>(new FutureTask<Void>(task, null));
+        InternalFutureTask<Void> futureTask = new InternalFutureTask<>(new FutureTask<>(task, null));
         executorService.execute(futureTask);
         return futureTask;
     }
